@@ -11,6 +11,7 @@
 #include <zmk/keymap.h>
 #include <zmk/battery.h>
 #include <zmk/endpoints.h>
+#include <zmk/ble.h>
 
 #include "zmk_hud/telem_format.h"
 #include "telem_transport.h"
@@ -38,14 +39,23 @@ static size_t active_layers(uint8_t *out, size_t cap)
 
 static const char *ep_kind_str(void)
 {
-    struct zmk_endpoint_instance ep = zmk_endpoint_get_selected();
+    struct zmk_endpoint_instance ep = zmk_endpoints_selected();
     return ep.transport == ZMK_TRANSPORT_USB ? "usb" : "ble";
 }
 
 static int ep_profile_idx(void)
 {
-    struct zmk_endpoint_instance ep = zmk_endpoint_get_selected();
+    struct zmk_endpoint_instance ep = zmk_endpoints_selected();
     return ep.transport == ZMK_TRANSPORT_BLE ? ep.ble.profile_index : -1;
+}
+
+/* v0.3.0 has no ep_connected(): USB is "connected" when selected;
+ * BLE is connected when the active profile has a live connection. */
+static bool ep_connected(void)
+{
+    struct zmk_endpoint_instance ep = zmk_endpoints_selected();
+    if (ep.transport == ZMK_TRANSPORT_USB) return true;
+    return zmk_ble_active_profile_is_connected();
 }
 
 /* peripheral battery cached from events (no direct query API on central) */
@@ -67,7 +77,7 @@ void telem_send_snapshot(void)
                            (int)zmk_battery_state_of_charge(),
                            s_batt_peripheral,
                            ep_kind_str(), ep_profile_idx(),
-                           zmk_endpoint_is_connected());
+                           ep_connected());
     if (n > 0) telem_emit((uint8_t *)line, (size_t)n);
 }
 
@@ -132,7 +142,7 @@ static int on_endpoint(const zmk_event_t *eh)
     if (as_zmk_endpoint_changed(eh) || as_zmk_ble_active_profile_changed(eh)) {
         char line[LINE_MAX];
         int n = telem_fmt_ep(line, sizeof line, ep_kind_str(),
-                             ep_profile_idx(), zmk_endpoint_is_connected());
+                             ep_profile_idx(), ep_connected());
         if (n > 0) telem_emit((uint8_t *)line, (size_t)n);
     }
     return ZMK_EV_EVENT_BUBBLE;
