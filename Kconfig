@@ -1,0 +1,27 @@
+config ZMK_HUD_TELEMETRY
+    bool "Stream keyboard state telemetry to a host HUD"
+    default n
+    help
+      Subscribes to ZMK events on the central and emits newline-delimited
+      JSON telemetry over the enabled transports.
+
+if ZMK_HUD_TELEMETRY
+
+config ZMK_HUD_TELEMETRY_USB
+    bool "Emit telemetry over a USB CDC-ACM serial port"
+    default y
+    select SERIAL
+    select UART_LINE_CTRL
+    select USB_DEVICE_STACK
+    select USB_CDC_ACM
+
+config ZMK_HUD_TELEMETRY_BLE
+    bool "Emit telemetry over a custom BLE GATT notify characteristic"
+    default y
+    depends on ZMK_BLE
+
+config ZMK_HUD_TELEMETRY_LINE_MAX
+    int "Max telemetry line length (bytes)"
+    default 96
+
+endif

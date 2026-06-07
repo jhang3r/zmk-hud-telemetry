@@ -1,0 +1,4 @@
+name: zmk-hud-telemetry
+build:
+  cmake: .
+  kconfig: Kconfig
