@@ -9,6 +9,7 @@
 #include <zmk/events/endpoint_changed.h>
 #include <zmk/events/ble_active_profile_changed.h>
 #include <zmk/keymap.h>
+#include <zmk/behavior.h>
 #include <zmk/battery.h>
 #include <zmk/endpoints.h>
 #include <zmk/ble.h>
@@ -16,10 +17,14 @@
 #include "zmk_hud/telem_format.h"
 #include "telem_transport.h"
 
-#define LINE_MAX CONFIG_ZMK_HUD_TELEMETRY_LINE_MAX
+#define LINE_MAX  CONFIG_ZMK_HUD_TELEMETRY_LINE_MAX
+#define KEY_COUNT CONFIG_ZMK_HUD_TELEMETRY_KEY_COUNT
 
 /* code events carry no position; send a sentinel the app ignores for legends */
 #define NO_POSITION 65535
+
+void telem_send_keymap(void);          /* defined below; called from snapshot */
+static void keymap_poll_start(void);   /* defined below; started from init */
 
 /* ---- helpers ---------------------------------------------------------- */
 
@@ -79,7 +84,154 @@ void telem_send_snapshot(void)
                            ep_kind_str(), ep_profile_idx(),
                            ep_connected());
     if (n > 0) telem_emit((uint8_t *)line, (size_t)n);
+
+    telem_send_keymap(); /* stream the live keymap right after the snapshot */
 }
+
+/* ---- keymap dump ------------------------------------------------------ *
+ * The app derives key legends from this stream (not from the source .keymap
+ * file), so it reflects runtime edits made via ZMK Studio. The dump is paced
+ * across work-queue ticks because BLE notify buffers are small and a tight
+ * loop would overflow them and drop most lines.
+ *
+ * Layer numbering matches the `lyr`/`snapshot` messages: the layer-state
+ * bitmask is indexed by layer id, so we iterate ids 0..LAYERS_LEN-1 and send
+ * the id as "l". (For a keymap whose layers haven't been reordered/added via
+ * Studio, id == index, which is what the app's keymap order expects.) */
+
+#define KEYMAP_DUMP_BATCH 4   /* lines emitted per pump tick */
+#define KEYMAP_DUMP_GAP_MS 20 /* delay between pump ticks (lets BLE drain) */
+
+static struct {
+    bool active;
+    int phase;       /* 0=begin, 1=klyr, 2=bind, 3=end, 4=done */
+    uint8_t layer;   /* current layer id */
+    uint16_t pos;    /* current key position (bind phase) */
+} s_dump;
+
+/* Emit one line, advance the cursor. Returns true if more remain. */
+static bool keymap_dump_step(void)
+{
+    char line[LINE_MAX];
+    int n;
+
+    switch (s_dump.phase) {
+    case 0:
+        n = telem_fmt_kmap_begin(line, sizeof line, ZMK_KEYMAP_LAYERS_LEN, KEY_COUNT);
+        if (n > 0) telem_emit((uint8_t *)line, (size_t)n);
+        s_dump.phase = 1;
+        s_dump.layer = 0;
+        return true;
+    case 1: {
+        const char *name = zmk_keymap_layer_name((zmk_keymap_layer_id_t)s_dump.layer);
+        n = telem_fmt_klyr(line, sizeof line, s_dump.layer, name);
+        if (n > 0) telem_emit((uint8_t *)line, (size_t)n);
+        if (++s_dump.layer >= ZMK_KEYMAP_LAYERS_LEN) {
+            s_dump.phase = 2;
+            s_dump.layer = 0;
+            s_dump.pos = 0;
+        }
+        return true;
+    }
+    case 2: {
+        const struct zmk_behavior_binding *b =
+            zmk_keymap_get_layer_binding_at_idx((zmk_keymap_layer_id_t)s_dump.layer,
+                                                (uint8_t)s_dump.pos);
+        n = telem_fmt_bind(line, sizeof line, s_dump.layer, s_dump.pos,
+                           b ? b->behavior_dev : NULL,
+                           b ? b->param1 : 0, b ? b->param2 : 0);
+        if (n > 0) telem_emit((uint8_t *)line, (size_t)n);
+        if (++s_dump.pos >= KEY_COUNT) {
+            s_dump.pos = 0;
+            if (++s_dump.layer >= ZMK_KEYMAP_LAYERS_LEN) s_dump.phase = 3;
+        }
+        return true;
+    }
+    case 3:
+        n = telem_fmt_kmap_end(line, sizeof line);
+        if (n > 0) telem_emit((uint8_t *)line, (size_t)n);
+        s_dump.phase = 4;
+        return false;
+    default:
+        return false;
+    }
+}
+
+static void keymap_pump_handler(struct k_work *w);
+static K_WORK_DELAYABLE_DEFINE(keymap_pump, keymap_pump_handler);
+
+static void keymap_pump_handler(struct k_work *w)
+{
+    ARG_UNUSED(w);
+    for (int i = 0; i < KEYMAP_DUMP_BATCH; i++) {
+        if (!keymap_dump_step()) {
+            s_dump.active = false;
+            return;
+        }
+    }
+    k_work_reschedule(&keymap_pump, K_MSEC(KEYMAP_DUMP_GAP_MS));
+}
+
+void telem_send_keymap(void)
+{
+    /* (re)start from the top; safe to call while a dump is in flight */
+    s_dump.active = true;
+    s_dump.phase = 0;
+    s_dump.layer = 0;
+    s_dump.pos = 0;
+    k_work_reschedule(&keymap_pump, K_NO_WAIT);
+}
+
+/* ---- keymap change detection (poll, since ZMK raises no binding event) -- */
+
+#if CONFIG_ZMK_HUD_TELEMETRY_KEYMAP_POLL_MS > 0
+
+static uint32_t keymap_checksum(void)
+{
+    uint32_t h = 2166136261u; /* FNV-1a */
+    for (uint8_t l = 0; l < ZMK_KEYMAP_LAYERS_LEN; l++) {
+        for (uint16_t p = 0; p < KEY_COUNT; p++) {
+            const struct zmk_behavior_binding *b =
+                zmk_keymap_get_layer_binding_at_idx((zmk_keymap_layer_id_t)l, (uint8_t)p);
+            uint32_t v1 = b ? b->param1 : 0;
+            uint32_t v2 = b ? b->param2 : 0;
+            uint32_t vd = b ? (uint32_t)(uintptr_t)b->behavior_dev : 0;
+            h = (h ^ v1) * 16777619u;
+            h = (h ^ v2) * 16777619u;
+            h = (h ^ vd) * 16777619u; /* behavior_dev ptr is stable per behavior */
+        }
+    }
+    return h;
+}
+
+static void keymap_poll_handler(struct k_work *w);
+static K_WORK_DELAYABLE_DEFINE(keymap_poll, keymap_poll_handler);
+
+static void keymap_poll_handler(struct k_work *w)
+{
+    ARG_UNUSED(w);
+    static bool primed;
+    static uint32_t last_sum;
+
+    uint32_t sum = keymap_checksum();
+    if (!primed) {
+        primed = true;          /* establish baseline; connect already dumped */
+        last_sum = sum;
+    } else if (sum != last_sum) {
+        last_sum = sum;
+        if (!s_dump.active) telem_send_keymap();
+    }
+    k_work_reschedule(&keymap_poll, K_MSEC(CONFIG_ZMK_HUD_TELEMETRY_KEYMAP_POLL_MS));
+}
+
+static void keymap_poll_start(void)
+{
+    k_work_reschedule(&keymap_poll, K_MSEC(CONFIG_ZMK_HUD_TELEMETRY_KEYMAP_POLL_MS));
+}
+
+#else
+static void keymap_poll_start(void) {}
+#endif
 
 /* ---- listeners -------------------------------------------------------- */
 
@@ -168,6 +320,7 @@ ZMK_SUBSCRIPTION(hud_ep, zmk_ble_active_profile_changed);
 static int hud_init(void)
 {
     telem_transport_init();
+    keymap_poll_start();
     return 0;
 }
 SYS_INIT(hud_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);

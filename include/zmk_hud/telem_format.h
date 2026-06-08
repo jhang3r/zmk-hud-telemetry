@@ -29,4 +29,20 @@ int telem_fmt_batt(char *out, size_t cap, char src, uint8_t pct);
 
 int telem_fmt_ep(char *out, size_t cap, const char *kind, int profile, bool on);
 
+/* ---- keymap dump ------------------------------------------------------ *
+ * A full keymap is streamed as: one kmap_begin, then for each layer a klyr
+ * (layer name) and one bind per key position, then one kmap_end. The host
+ * buffers between begin and end, then swaps in the new keymap atomically. */
+
+int telem_fmt_kmap_begin(char *out, size_t cap, int layer_count, int key_count);
+
+int telem_fmt_klyr(char *out, size_t cap, int layer, const char *name);
+
+/* behavior: the binding's behavior_dev name; NULL renders as "". p1/p2 are the
+ * raw binding params (for &kp, p1 packs the HID usage as (page<<16)|id). */
+int telem_fmt_bind(char *out, size_t cap, int layer, int pos,
+                   const char *behavior, uint32_t p1, uint32_t p2);
+
+int telem_fmt_kmap_end(char *out, size_t cap);
+
 #endif

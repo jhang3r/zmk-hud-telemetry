@@ -80,3 +80,28 @@ int telem_fmt_ep(char *out, size_t cap, const char *kind, int profile, bool on)
     return emit(out, cap, "{\"t\":\"ep\",\"k\":\"%s\",\"pf\":%d,\"on\":%s}\n",
                 kind, profile, on ? "true" : "false");
 }
+
+int telem_fmt_kmap_begin(char *out, size_t cap, int layer_count, int key_count)
+{
+    return emit(out, cap, "{\"t\":\"kmap\",\"lc\":%d,\"kc\":%d}\n",
+                layer_count, key_count);
+}
+
+int telem_fmt_klyr(char *out, size_t cap, int layer, const char *name)
+{
+    return emit(out, cap, "{\"t\":\"klyr\",\"l\":%d,\"n\":\"%s\"}\n",
+                layer, name ? name : "");
+}
+
+int telem_fmt_bind(char *out, size_t cap, int layer, int pos,
+                   const char *behavior, uint32_t p1, uint32_t p2)
+{
+    return emit(out, cap,
+        "{\"t\":\"bind\",\"l\":%d,\"p\":%d,\"b\":\"%s\",\"p1\":%u,\"p2\":%u}\n",
+        layer, pos, behavior ? behavior : "", p1, p2);
+}
+
+int telem_fmt_kmap_end(char *out, size_t cap)
+{
+    return emit(out, cap, "{\"t\":\"kmend\"}\n");
+}

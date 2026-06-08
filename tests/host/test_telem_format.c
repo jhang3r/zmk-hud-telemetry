@@ -30,6 +30,16 @@ int main(void)
     OK(telem_fmt_batt(buf, sizeof buf, 'p', 78), "{\"t\":\"bat\",\"s\":\"p\",\"v\":78}\n");
     OK(telem_fmt_ep(buf, sizeof buf, "usb", -1, true), "{\"t\":\"ep\",\"k\":\"usb\",\"pf\":-1,\"on\":true}\n");
 
+    /* keymap dump messages */
+    OK(telem_fmt_kmap_begin(buf, sizeof buf, 3, 60), "{\"t\":\"kmap\",\"lc\":3,\"kc\":60}\n");
+    OK(telem_fmt_klyr(buf, sizeof buf, 0, "BASE"), "{\"t\":\"klyr\",\"l\":0,\"n\":\"BASE\"}\n");
+    OK(telem_fmt_bind(buf, sizeof buf, 0, 30, "key_press", 458756u, 0u),
+       "{\"t\":\"bind\",\"l\":0,\"p\":30,\"b\":\"key_press\",\"p1\":458756,\"p2\":0}\n");
+    /* NULL behavior (unbound slot) renders as empty string */
+    OK(telem_fmt_bind(buf, sizeof buf, 1, 59, NULL, 0u, 0u),
+       "{\"t\":\"bind\",\"l\":1,\"p\":59,\"b\":\"\",\"p1\":0,\"p2\":0}\n");
+    OK(telem_fmt_kmap_end(buf, sizeof buf), "{\"t\":\"kmend\"}\n");
+
     /* overflow returns -1 */
     { char small[8]; int r = telem_fmt_hello(small, sizeof small, "handwired_split");
       if (r != -1) { printf("FAIL: overflow not detected (r=%d)\n", r); fails++; } }

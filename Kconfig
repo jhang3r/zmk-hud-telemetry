@@ -22,6 +22,25 @@ config ZMK_HUD_TELEMETRY_BLE
 
 config ZMK_HUD_TELEMETRY_LINE_MAX
     int "Max telemetry line length (bytes)"
-    default 96
+    default 160
+    help
+      Must fit the longest line. `bind` lines (behavior name + two 32-bit
+      params) and `klyr` lines (layer display-name) are the longest.
+
+config ZMK_HUD_TELEMETRY_KEY_COUNT
+    int "Number of key positions per layer"
+    default 60
+    help
+      Positions dumped per layer in the keymap stream (0..count-1). ZMK has no
+      public runtime macro for this in v0.3.0, so set it to the keyboard's
+      physical key count (handwired_split = 60).
+
+config ZMK_HUD_TELEMETRY_KEYMAP_POLL_MS
+    int "Keymap change-detection poll interval (ms, 0 = disabled)"
+    default 2000
+    help
+      ZMK raises no event when a binding changes (e.g. via ZMK Studio), so the
+      module periodically checksums the runtime keymap and re-streams it when it
+      changes. 0 disables polling (keymap is then only sent on connect).
 
 endif
